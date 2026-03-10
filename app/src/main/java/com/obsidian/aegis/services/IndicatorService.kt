@@ -2,10 +2,12 @@ package com.obsidian.aegis.services
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.net.TrafficStats
 import android.os.PowerManager
 import android.content.ComponentName
 import android.content.Intent
@@ -62,6 +64,7 @@ class IndicatorService : AccessibilityService() {
     private lateinit var accessLogsRepo: AccessLogsRepo
     private lateinit var usageStatsHelper: com.obsidian.aegis.helpers.UsageStatsHelper
     private val notification_channel_id = "PRIVACY_INDICATORS_NOTIFICATION"
+    private val suspicious_channel_id = "SUSPICIOUS_ACTIVITIES_NOTIFICATION"
     private var notifManager: NotificationManagerCompat? = null
     private var notificationBuilder: NotificationCompat.Builder? = null
     private val notificationID = 256
@@ -74,14 +77,28 @@ class IndicatorService : AccessibilityService() {
     private var activeMicAppId: String? = null
     private var activeLocationAppId: String? = null
 
-    private val cameraAccessTimes = mutableMapOf<String, MutableList<Long>>()
     private val micStartTimes = mutableMapOf<String, Long>()
-    private val lastLocationTimes = mutableMapOf<String, Long>()
     private val locationStartTimes = mutableMapOf<String, Long>()
     private val cameraStartTimes = mutableMapOf<String, Long>()
-    private val locationViolationCount = mutableMapOf<String, Int>()
     private val lastSuspiciousLogTime = mutableMapOf<String, Long>()
     private val appInfoHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private val sensorAccessTimes = mutableMapOf<String, MutableList<Long>>()
+    private val appStartTxBytes = mutableMapOf<String, Long>()
+    private val sensorMonitorHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var isMonitoringNetwork = false
+    
+    private val sensorMonitorRunnable = object : Runnable {
+        override fun run() {
+            if (isCameraOn) checkPeriodicSuspicious("Camera", activeCameraAppId ?: currentAppId)
+            if (isMicOn) checkPeriodicSuspicious("Microphone", activeMicAppId ?: currentAppId)
+            if (isLocationOn) checkPeriodicSuspicious("Location", activeLocationAppId ?: currentAppId)
+            
+            if (isMonitoringNetwork) {
+                sensorMonitorHandler.postDelayed(this, 3000)
+            }
+        }
+    }
 
     private fun captureRealForegroundApp(): String {
         return usageStatsHelper.getCurrentForegroundApp()
@@ -148,6 +165,7 @@ class IndicatorService : AccessibilityService() {
                     activeCameraAppId = null
                     hideCam()
                     dismissNotification()
+                    stopSensorMonitoring()
                 }
             }
 
@@ -156,11 +174,16 @@ class IndicatorService : AccessibilityService() {
                 if (!isCameraOn) {
                     isCameraOn = true
                     activeCameraAppId = captureRealForegroundApp()
-                    cameraStartTimes[activeCameraAppId!!] = System.currentTimeMillis()
+                    val appId = activeCameraAppId!!
+                    cameraStartTimes[appId] = System.currentTimeMillis()
                     showCam()
                     triggerVibration()
                     showNotification()
-                    checkCameraSuspicious()
+                    
+                    recordTrafficStart(appId)
+                    checkFrequentAccessSuspicious("Camera", appId)
+                    startSensorMonitoring()
+                    
                     showAppInfoOnIndicator()
                     
                     appInfoHandler.postDelayed({
@@ -178,24 +201,6 @@ class IndicatorService : AccessibilityService() {
         return cameraCallback as AvailabilityCallback
     }
 
-    private fun checkCameraSuspicious() {
-        if (!sharedPrefManager.isSuspiciousDetectionEnabled) return
-        if (checkScreenOffSuspicious("Camera")) return
-        
-        val now = System.currentTimeMillis()
-        val hourAgo = now - 3600000
-        val times = cameraAccessTimes.getOrPut(currentAppId) { mutableListOf() }
-        times.add(now)
-        times.removeAll { it < hourAgo }
-
-        if (times.size > 5) {
-            saveSuspiciousActivity(
-                "Camera used > 5 times in 1 hr",
-                "High"
-            )
-        }
-    }
-
     private fun getMicCallback(): AudioRecordingCallback {
         micCallback = object : AudioRecordingCallback() {
             override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
@@ -205,11 +210,17 @@ class IndicatorService : AccessibilityService() {
                         
                         var micApp = captureRealForegroundApp()
                         activeMicAppId = micApp
+                        val appId = activeMicAppId!!
                         
                         showMic()
                         triggerVibration()
                         showNotification()
-                        micStartTimes[activeMicAppId!!] = System.currentTimeMillis()
+                        micStartTimes[appId] = System.currentTimeMillis()
+                        
+                        recordTrafficStart(appId)
+                        checkFrequentAccessSuspicious("Microphone", appId)
+                        startSensorMonitoring()
+                        
                         showAppInfoOnIndicator()
                         
                         appInfoHandler.postDelayed({
@@ -221,10 +232,6 @@ class IndicatorService : AccessibilityService() {
                                 }
                             }
                         }, 1000)
-                        
-                        if (sharedPrefManager.isSuspiciousDetectionEnabled) {
-                            checkScreenOffSuspicious("Microphone")
-                        }
                     }
                 } else {
                     if (isMicOn) {
@@ -235,25 +242,15 @@ class IndicatorService : AccessibilityService() {
                         val startTime = micStartTimes[app] ?: 0L
                         if (startTime > 0) {
                             makeLog(IndicatorType.MICROPHONE, startTime, System.currentTimeMillis(), app)
-                            checkMicSuspicious(System.currentTimeMillis() - startTime)
                             micStartTimes[app] = 0L
                         }
                         activeMicAppId = null
+                        stopSensorMonitoring()
                     }
                 }
             }
         }
         return micCallback as AudioRecordingCallback
-    }
-
-    private fun checkMicSuspicious(durationMs: Long) {
-        if (!sharedPrefManager.isSuspiciousDetectionEnabled) return
-        if (durationMs > 60000) {
-            saveSuspiciousActivity(
-                "Mic active > 60 sec",
-                "Critical"
-            )
-        }
     }
 
     private fun getLocationCallback(): GnssStatus.Callback {
@@ -263,11 +260,16 @@ class IndicatorService : AccessibilityService() {
                 if (!isLocationOn) {
                     isLocationOn = true
                     activeLocationAppId = captureRealForegroundApp()
-                    locationStartTimes[activeLocationAppId!!] = System.currentTimeMillis()
+                    val appId = activeLocationAppId!!
+                    locationStartTimes[appId] = System.currentTimeMillis()
                     showLocation()
                     triggerVibration()
                     showNotification()
-                    checkLocationSuspicious()
+                    
+                    recordTrafficStart(appId)
+                    checkFrequentAccessSuspicious("Location", appId)
+                    startSensorMonitoring()
+                    
                     showAppInfoOnIndicator()
                     
                     appInfoHandler.postDelayed({
@@ -295,59 +297,117 @@ class IndicatorService : AccessibilityService() {
                     activeLocationAppId = null
                     hideLocation()
                     dismissNotification()
+                    stopSensorMonitoring()
                 }
             }
         }
         return locationCallback as GnssStatus.Callback
     }
 
-    private fun checkLocationSuspicious() {
-        if (!sharedPrefManager.isSuspiciousDetectionEnabled) return
-        if (checkScreenOffSuspicious("Location")) return
-        
-        val now = System.currentTimeMillis()
-        val lastTime = lastLocationTimes[currentAppId] ?: 0L
-        if (now - lastTime in 1..12000) { // Approx 10s interval
-            val count = (locationViolationCount[currentAppId] ?: 0) + 1
-            locationViolationCount[currentAppId] = count
-            if (count >= 3) {
-                saveSuspiciousActivity(
-                    "GPS accessed every 10 sec",
-                    "Tracking"
-                )
-                locationViolationCount[currentAppId] = 0
-            }
-        } else {
-            locationViolationCount[currentAppId] = 0
+    private fun startSensorMonitoring() {
+        if (!isMonitoringNetwork) {
+            isMonitoringNetwork = true
+            sensorMonitorHandler.post(sensorMonitorRunnable)
         }
-        lastLocationTimes[currentAppId] = now
     }
 
-    private fun checkScreenOffSuspicious(sensor: String): Boolean {
-        if (!sharedPrefManager.isScreenOffMonitoringEnabled()) return false
+    private fun stopSensorMonitoring() {
+        if (!isCameraOn && !isMicOn && !isLocationOn) {
+            isMonitoringNetwork = false
+            sensorMonitorHandler.removeCallbacks(sensorMonitorRunnable)
+        }
+    }
+
+    private fun recordTrafficStart(appId: String) {
+        val uid = getUidForPackage(appId)
+        if (uid != -1) {
+            appStartTxBytes[appId] = TrafficStats.getUidTxBytes(uid)
+        }
+    }
+
+    private fun checkPeriodicSuspicious(sensor: String, appId: String) {
+        if (!sharedPrefManager.isSuspiciousDetectionEnabled) return
+        if (sharedPrefManager.isAppWhitelisted(appId)) return
+
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!powerManager.isInteractive) {
-            saveSuspiciousActivity("$sensor accessed while screen was off", "Critical")
-            showScreenOffAlertNotification(sensor, getAppName(currentAppId))
-            return true
+        val isScreenOff = !powerManager.isInteractive
+        
+        if (isScreenOff && sharedPrefManager.isScreenOffMonitoringEnabled()) {
+            saveSuspiciousActivity(appId, "$sensor accessed while screen was off", "Critical")
+        } else if (isAppInBackground(appId)) {
+            saveSuspiciousActivity(appId, "$sensor accessed while app is in background", "High")
+        }
+        
+        val uid = getUidForPackage(appId)
+        if (uid != -1) {
+            val startTx = appStartTxBytes[appId] ?: 0L
+            val currentTx = TrafficStats.getUidTxBytes(uid)
+            
+            // On modern Android (7.0+), TrafficStats blocks reading other apps' data. 
+            // It returns UNSUPPORTED (-1). If it does this, we cannot verify byte count.
+            // However, since they ARE using the sensor and are NOT whitelisted, it remains suspicious.
+            if (currentTx == TrafficStats.UNSUPPORTED.toLong() || (startTx >= 0 && currentTx > startTx + 1024)) { 
+                saveSuspiciousActivity(appId, "Sending $sensor data to remote network", "Critical")
+                appStartTxBytes[appId] = currentTx
+            }
+        }
+    }
+
+
+    private fun checkFrequentAccessSuspicious(sensor: String, appId: String) {
+        if (!sharedPrefManager.isSuspiciousDetectionEnabled) return
+        if (sharedPrefManager.isAppWhitelisted(appId)) return
+        
+        val now = System.currentTimeMillis()
+        val shortTimeWindow = now - 60000 // 1 minute window
+        val times = sensorAccessTimes.getOrPut(appId) { mutableListOf() }
+        times.add(now)
+        times.removeAll { it < shortTimeWindow }
+
+        if (times.size >= 3) {
+            saveSuspiciousActivity(appId, "Accessed $sensor multiple times in short period", "High")
+            times.clear()
+        }
+    }
+
+    private fun getUidForPackage(packageName: String): Int {
+        return try {
+            packageManager.getApplicationInfo(packageName, 0).uid
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
+    private fun isAppInBackground(packageName: String): Boolean {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val runningProcesses = am.runningAppProcesses ?: return false
+        for (processInfo in runningProcesses) {
+            if (processInfo.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND && 
+                processInfo.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
+                for (pkg in processInfo.pkgList) {
+                    if (pkg == packageName) return true
+                }
+            }
         }
         return false
     }
 
-    private fun showScreenOffAlertNotification(sensor: String, appName: String) {
+    private fun showSuspiciousAlertNotification(appName: String, reason: String) {
         if (!sharedPrefManager.isNotificationEnabled) return
-        createNotificationChannel()
-        val alertBuilder = NotificationCompat.Builder(applicationContext, notification_channel_id)
+        createSuspiciousNotificationChannel()
+        val alertBuilder = NotificationCompat.Builder(applicationContext, suspicious_channel_id)
             .setSmallIcon(R.drawable.camera_indicator2)
-            .setContentTitle("⚠️ Spyware Alert: $sensor Accessed!")
-            .setContentText("$appName accessed your $sensor while the screen was off.")
+            .setContentTitle("⚠️ Suspicious Activity Detected!")
+            .setContentText("The app $appName is suspicious: $reason. Check it!")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("The app $appName is suspicious: $reason. Check it!"))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setColor(Color.RED)
             
-        NotificationManagerCompat.from(applicationContext).notify(Math.random().toInt(), alertBuilder.build())
+        val notificationId = (System.currentTimeMillis() % 100000).toInt()
+        NotificationManagerCompat.from(applicationContext).notify(notificationId, alertBuilder.build())
     }
 
     private fun showAppInfoOnIndicator() {
@@ -373,9 +433,9 @@ class IndicatorService : AccessibilityService() {
         }
     }
 
-    private fun saveSuspiciousActivity(description: String, riskLevel: String) {
+    private fun saveSuspiciousActivity(appId: String, description: String, riskLevel: String) {
         val now = System.currentTimeMillis()
-        if (sharedPrefManager.isAppWhitelisted(currentAppId)) return // Skip if whitelisted
+        if (sharedPrefManager.isAppWhitelisted(appId)) return
         
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         val isScreenOff = !powerManager.isInteractive
@@ -384,19 +444,20 @@ class IndicatorService : AccessibilityService() {
         var finalRiskLevel = riskLevel
         var finalDescription = description
         
-        if (isScreenOff && monitoringEnabled) {
-            finalRiskLevel = "Critical" // Escalate risk if screen is off
+        if (isScreenOff && monitoringEnabled && !description.contains("screen was off")) {
+            finalRiskLevel = "Critical"
             finalDescription = "[Screen-Off] $description"
         }
 
-        val key = "${currentAppId}_$description"
+        val key = "${appId}_$description"
         val lastTime = lastSuspiciousLogTime[key] ?: 0L
-        if (now - lastTime < 300000) return // Debounce 5 mins for same app/issue
+        if (now - lastTime < 300000) return 
 
+        val appName = getAppName(appId)
         val activity = com.obsidian.aegis.models.SuspiciousActivity(
             time = now,
-            appId = currentAppId,
-            appName = getAppName(currentAppId),
+            appId = appId,
+            appName = appName,
             description = finalDescription,
             riskLevel = finalRiskLevel,
             isScreenOff = isScreenOff
@@ -405,6 +466,8 @@ class IndicatorService : AccessibilityService() {
             accessLogsRepo.saveSuspiciousActivity(activity)
             lastSuspiciousLogTime[key] = now
         }
+        
+        showSuspiciousAlertNotification(appName, finalDescription)
     }
 
     private fun triggerVibration() {
@@ -629,6 +692,20 @@ class IndicatorService : AccessibilityService() {
             val description = getString(R.string.notification_alert_summary)
             channel.description = description
             channel.lightColor = Color.RED
+            val notificationManager = applicationContext.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createSuspiciousNotificationChannel() {
+        val notificationChannelName = "Suspicious Alerts"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val importance = NotificationManager.IMPORTANCE_HIGH
+            val channel = NotificationChannel(suspicious_channel_id, notificationChannelName, importance)
+            val description = "Critical alerts for suspicious app behaviors"
+            channel.description = description
+            channel.lightColor = Color.RED
+            channel.enableVibration(true)
             val notificationManager = applicationContext.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }

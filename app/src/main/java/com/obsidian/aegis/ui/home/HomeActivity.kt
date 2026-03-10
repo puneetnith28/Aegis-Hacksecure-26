@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import android.os.Build
 import androidx.lifecycle.ViewModelProvider
 import com.obsidian.aegis.BuildConfig
 import com.obsidian.aegis.databinding.ActivityHomeBinding
@@ -49,6 +50,15 @@ class HomeActivity : AppCompatActivity() {
         setUpObservers()
         setUpListeners()
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    102
+                )
+            }
+        }
     }
 
     private fun setUpObservers() {
@@ -162,7 +172,21 @@ class HomeActivity : AppCompatActivity() {
         }
 
         serviceEnabledBinding.switchNotification.setOnCheckedChangeListener { button, isEnabled ->
-            viewModel.setNotificationAlertStatus(isEnabled)
+            if (isEnabled) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    button.isChecked = false
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                        102
+                    )
+                } else {
+                    viewModel.setNotificationAlertStatus(true)
+                }
+            } else {
+                viewModel.setNotificationAlertStatus(false)
+            }
         }
 
         serviceEnabledBinding.settingsText.setOnClickListener {
@@ -272,6 +296,14 @@ class HomeActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(this, "Location permission is required", Toast.LENGTH_LONG).show()
                 serviceEnabledBinding.switchLocation.isChecked = false
+            }
+        } else if (requestCode == 102) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                serviceEnabledBinding.switchNotification.isChecked = true
+                viewModel.setNotificationAlertStatus(true)
+            } else {
+                Toast.makeText(this, "Notification permission is required for alerts", Toast.LENGTH_LONG).show()
+                serviceEnabledBinding.switchNotification.isChecked = false
             }
         }
     }
