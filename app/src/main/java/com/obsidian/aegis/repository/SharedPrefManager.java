@@ -31,6 +31,7 @@ public class SharedPrefManager {
     private static final String SCREEN_OFF_MONITORING_ENABLED = "SCREEN_OFF_MONITORING_ENABLED";
     private static final String SHOW_APP_INFO_ON_INDICATOR = "SHOW_APP_INFO_ON_INDICATOR";
     private static final String WHITELISTED_APPS = "WHITELISTED_APPS";
+    private static final String AUTO_REVOKE_ENABLED = "AUTO_REVOKE_ENABLED";
 
     private static final String DEFAULT_INDICATOR_COLOR = "#3F51B5";
     private static final String DEFAULT_CAMERA_COLOR = "#E91E63"; // Rose
@@ -45,6 +46,7 @@ public class SharedPrefManager {
     private static final boolean DEFAULT_SUSPICIOUS_DETECTION_ENABLED = true;
     private static final boolean DEFAULT_SCREEN_OFF_MONITORING_ENABLED = true;
     private static final boolean DEFAULT_SHOW_APP_INFO_ON_INDICATOR = true;
+    private static final boolean DEFAULT_AUTO_REVOKE_ENABLED = false;
 
     private static final String DEFAULT_INDICATOR_SIZE = IndicatorSize.M.name();
     private static final String DEFAULT_INDICATOR_OPACITY = IndicatorOpacity.EIGHTY.name();
@@ -163,6 +165,14 @@ public class SharedPrefManager {
 
     public void setShowAppInfoOnIndicator(boolean value) {
         setBoolean(context, SHOW_APP_INFO_ON_INDICATOR, value);
+    }
+
+    public boolean isAutoRevokeEnabled() {
+        return getBoolean(context, AUTO_REVOKE_ENABLED, DEFAULT_AUTO_REVOKE_ENABLED);
+    }
+
+    public void setAutoRevokeEnabled(boolean value) {
+        setBoolean(context, AUTO_REVOKE_ENABLED, value);
     }
 
     public void setIndicatorColor(String value) {

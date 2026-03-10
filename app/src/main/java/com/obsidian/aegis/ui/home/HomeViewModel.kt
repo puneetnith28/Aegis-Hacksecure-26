@@ -58,6 +58,7 @@ class HomeViewModel(application: Application,
 
     val showAppInfoOnIndicatorStatus = MutableLiveData(sharedPrefManager.isShowAppInfoOnIndicator)
 
+    val autoRevokeEnabledStatus = MutableLiveData(sharedPrefManager.isAutoRevokeEnabled)
 
     val indicatorForegroundColor = MutableLiveData(sharedPrefManager.indicatorColor)
 
@@ -107,6 +108,11 @@ class HomeViewModel(application: Application,
     fun setShowAppInfoOnIndicatorStatus(isEnabled: Boolean) {
         sharedPrefManager.setShowAppInfoOnIndicator(isEnabled)
         showAppInfoOnIndicatorStatus.value = isEnabled
+    }
+
+    fun setAutoRevokeEnabledStatus(isEnabled: Boolean) {
+        sharedPrefManager.setAutoRevokeEnabled(isEnabled)
+        autoRevokeEnabledStatus.value = isEnabled
     }
 
     fun setIndicatorForegroundColor(color: String) {

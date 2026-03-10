@@ -89,6 +89,10 @@ class HomeActivity : AppCompatActivity() {
             serviceEnabledBinding.switchAppInfo.isChecked = it
         })
 
+        viewModel.autoRevokeEnabledStatus.observe(this, {
+            serviceEnabledBinding.switchAutoRevoke.isChecked = it
+        })
+
         viewModel.privacyHealthScore.observe(this, { score ->
             serviceEnabledBinding.tvHealthScoreValue.text = score.toString()
             serviceEnabledBinding.cpHealthScore.progress = score
@@ -220,6 +224,10 @@ class HomeActivity : AppCompatActivity() {
 
         serviceEnabledBinding.switchAppInfo.setOnCheckedChangeListener { button, isEnabled ->
             viewModel.setShowAppInfoOnIndicatorStatus(isEnabled)
+        }
+
+        serviceEnabledBinding.switchAutoRevoke.setOnCheckedChangeListener { button, isEnabled ->
+            viewModel.setAutoRevokeEnabledStatus(isEnabled)
         }
 
         serviceEnabledBinding.suspiciousText.setOnClickListener {

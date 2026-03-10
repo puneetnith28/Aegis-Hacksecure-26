@@ -109,4 +109,19 @@
             android:text="com.app.package" />
     </LinearLayout>
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnRevoke"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Revoke"
+        android:textSize="12sp"
+        android:textColor="@color/white"
+        app:backgroundTint="@color/colorAccent"
+        app:cornerRadius="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        android:visibility="gone"
+        tools:visibility="visible" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

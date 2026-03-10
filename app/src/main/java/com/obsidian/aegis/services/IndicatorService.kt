@@ -48,7 +48,13 @@ import com.obsidian.aegis.repository.SharedPrefManager
 import com.obsidian.aegis.ui.home.HomeActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.net.Uri
+import android.provider.Settings
+import android.widget.Toast
 
 class IndicatorService : AccessibilityService() {
     private lateinit var binding: IndicatorsLayoutBinding
@@ -342,17 +348,12 @@ class IndicatorService : AccessibilityService() {
         if (uid != -1) {
             val startTx = appStartTxBytes[appId] ?: 0L
             val currentTx = TrafficStats.getUidTxBytes(uid)
-            
-            // On modern Android (7.0+), TrafficStats blocks reading other apps' data. 
-            // It returns UNSUPPORTED (-1). If it does this, we cannot verify byte count.
-            // However, since they ARE using the sensor and are NOT whitelisted, it remains suspicious.
-            if (currentTx == TrafficStats.UNSUPPORTED.toLong() || (startTx >= 0 && currentTx > startTx + 1024)) { 
+            if (startTx > 0 && currentTx > startTx + 1024) { 
                 saveSuspiciousActivity(appId, "Sending $sensor data to remote network", "Critical")
                 appStartTxBytes[appId] = currentTx
             }
         }
     }
-
 
     private fun checkFrequentAccessSuspicious(sensor: String, appId: String) {
         if (!sharedPrefManager.isSuspiciousDetectionEnabled) return
@@ -468,6 +469,48 @@ class IndicatorService : AccessibilityService() {
         }
         
         showSuspiciousAlertNotification(appName, finalDescription)
+
+        if (sharedPrefManager.isAutoRevokeEnabled()) {
+            triggerAutoRevokeSequence(appId)
+        }
+    }
+
+    private fun triggerAutoRevokeSequence(appId: String) {
+        GlobalScope.launch(Dispatchers.Main) {
+            var ringtone: Ringtone? = null
+            try {
+                var alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                if (alarmUri == null) {
+                    alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                }
+                ringtone = RingtoneManager.getRingtone(applicationContext, alarmUri)
+                ringtone?.play()
+            } catch (e: Exception) {
+            }
+
+            val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+            val pattern = longArrayOf(0, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                vibrator.vibrate(pattern, -1)
+            }
+
+            delay(5000)
+
+            ringtone?.stop()
+            vibrator.cancel()
+
+            try {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$appId")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                }
+                startActivity(intent)
+                Toast.makeText(applicationContext, "Aegis: Please revoke permissions for this suspicious app.", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+            }
+        }
     }
 
     private fun triggerVibration() {

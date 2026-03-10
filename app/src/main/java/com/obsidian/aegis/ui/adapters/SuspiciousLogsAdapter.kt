@@ -10,6 +10,10 @@ import com.obsidian.aegis.databinding.ItemSuspiciousLogsBinding
 import com.obsidian.aegis.models.SuspiciousActivity
 import java.text.SimpleDateFormat
 import java.util.*
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import com.obsidian.aegis.repository.SharedPrefManager
 
 class SuspiciousLogsAdapter : RecyclerView.Adapter<SuspiciousLogsAdapter.SuspiciousLogViewHolder>() {
 
@@ -58,6 +62,23 @@ class SuspiciousLogsAdapter : RecyclerView.Adapter<SuspiciousLogsAdapter.Suspici
             val dateFormat = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
             tvTimeStamp.text = timeFormat.format(date)
             tvDate.text = dateFormat.format(date)
+
+            val context = root.context
+            val sharedPrefManager = SharedPrefManager.getInstance(context)
+            if (!sharedPrefManager.isAutoRevokeEnabled()) {
+                btnRevoke.visibility = android.view.View.VISIBLE
+                btnRevoke.setOnClickListener {
+                    try {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${activity.appId}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                    }
+                }
+            } else {
+                btnRevoke.visibility = android.view.View.GONE
+            }
         }
     }
 }
