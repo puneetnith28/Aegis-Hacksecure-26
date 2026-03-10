@@ -38,14 +38,25 @@ class UsageStatsHelper(private val context: Context) {
         cal.add(Calendar.DAY_OF_YEAR, -1)
         val startTime = cal.timeInMillis
 
-        val stats = usageStatsManager.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY,
+        val stats = usageStatsManager.queryAndAggregateUsageStats(
             startTime,
             endTime
         )
 
-        val appStats = stats?.find { it.packageName == packageName }
-        return appStats?.totalTimeInForeground ?: 0L
+        val appStats = stats[packageName] ?: return 0L
+        
+        // Calculate background time.
+        // On Android Q (API 29) and above, totalTimeForegroundServiceUsed is available.
+        // It's a good proxy for background battery usage.
+        var bgTime = 0L
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            bgTime += appStats.totalTimeForegroundServiceUsed
+        }
+        
+        // As a supplementary or fallback, we could consider totalTimeVisible - totalTimeInForeground,
+        // but totalTimeForegroundServiceUsed is the most direct metric for active background work.
+        // If they want background battery usage proxy:
+        return bgTime
     }
 
     /**

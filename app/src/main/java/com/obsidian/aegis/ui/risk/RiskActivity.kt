@@ -29,7 +29,20 @@ class RiskActivity : AppCompatActivity() {
             finish()
         }
 
+        val usageStatsHelper = com.obsidian.aegis.helpers.UsageStatsHelper(this)
+        if (!usageStatsHelper.hasUsageStatsPermission()) {
+            usageStatsHelper.requestUsageStatsPermission()
+        }
+
         viewModel.loadRiskData()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val usageStatsHelper = com.obsidian.aegis.helpers.UsageStatsHelper(this)
+        if (usageStatsHelper.hasUsageStatsPermission()) {
+            viewModel.loadRiskData()
+        }
     }
 
     private fun setupRecyclerView() {
