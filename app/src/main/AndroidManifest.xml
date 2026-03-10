@@ -29,6 +29,9 @@
         <activity android:name=".ui.logs.AccessLogsActivity"
             android:exported="false" />
         <activity android:name=".ui.home.HomeActivity"
+            android:exported="true" />
+
+        <activity android:name=".ui.onboarding.OnboardingActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
